@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Food Tracker" />
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#0e1418" media="(prefers-color-scheme: dark)" />
+  <meta name="description" content="A daily portion tracker." />
+
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="style.css" />
+  <title>Food Tracker</title>
+</head>
+<body>
+
+  <main class="app" id="app" data-theme="swiss" data-mode="light">
+
+    <header class="app-chrome">
+      <button class="mode-trigger" id="modeTrigger" aria-label="Toggle dark mode" aria-pressed="false">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true">
+          <path d="M14 11.5 A 6 6 0 1 1 6.5 4 A 5 5 0 0 0 14 11.5 Z"/>
+        </svg>
+      </button>
+      <button class="theme-trigger" id="themeTrigger" aria-label="Choose theme" aria-haspopup="menu" aria-expanded="false">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+          <rect x="2" y="2" width="9" height="9"/>
+          <rect x="7" y="7" width="9" height="9" fill="currentColor"/>
+        </svg>
+      </button>
+      <div class="theme-menu" id="themeMenu" role="menu" data-open="false">
+        <button role="menuitem" data-theme-pick="swiss" aria-pressed="true">
+          <span class="swatches" aria-hidden="true">
+            <span class="swatch" style="background:#ffffff"></span>
+            <span class="swatch" style="background:#12181e"></span>
+            <span class="swatch" style="background:#4a6b80"></span>
+          </span>
+          <span>Swiss</span>
+          <span class="check" aria-hidden="true">✓</span>
+        </button>
+        <button role="menuitem" data-theme-pick="ration" aria-pressed="false">
+          <span class="swatches" aria-hidden="true">
+            <span class="swatch" style="background:#f2ede3"></span>
+            <span class="swatch" style="background:#2a2620"></span>
+            <span class="swatch" style="background:#8b7355"></span>
+          </span>
+          <span>Ration</span>
+          <span class="check" aria-hidden="true">✓</span>
+        </button>
+        <button role="menuitem" data-theme-pick="instrument" aria-pressed="false">
+          <span class="swatches" aria-hidden="true">
+            <span class="swatch" style="background:#0e1418"></span>
+            <span class="swatch" style="background:#5aa8e0"></span>
+            <span class="swatch" style="background:#e8923d"></span>
+          </span>
+          <span>Instrument</span>
+          <span class="check" aria-hidden="true">✓</span>
+        </button>
+      </div>
+    </header>
+
+    <section class="app-head">
+      <div class="app-title">
+        <h1>Today</h1>
+        <div class="total-fig" aria-live="polite">
+          <span class="done-sum">0</span><span class="slash">/</span><span class="denominator">19</span>
+        </div>
+      </div>
+      <div class="app-sub">
+        <span id="dateText"></span>
+        <span id="remainingText" aria-live="polite">19 remaining</span>
+      </div>
+    </section>
+
+    <section class="app-avoid" aria-label="Foods to avoid">
+      <div class="app-avoid-label">Avoid</div>
+      <div class="app-avoid-body">Bread, cake, cereal, chips, couscous, crackers, granola, oatmeal, pasta, popcorn, pretzels, quinoa, rice, corn, mango, parsnips, peas, potatoes, squash, yams, any sweets.</div>
+    </section>
+
+    <section id="categories"></section>
+
+    <div class="app-tail"></div>
+
+  </main>
+
+  <script src="app.js" defer></script>
+</body>
+</html>
