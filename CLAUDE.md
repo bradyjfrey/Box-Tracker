@@ -34,19 +34,24 @@ preserved in localStorage but never surfaced).
 
 ## What this project deliberately is NOT
 
-These are not missing features. They are explicit non-goals based on
-extensive design discussion. Do not add them without Brady asking:
+These are not missing features. They are explicit non-goals. Do not add
+them without Brady asking:
 
 - No food logging, calorie counting, or macro tracking
 - No notifications, reminders, or nags
 - No streaks, progress bars, weekly reports, or achievement systems
-- No server, no sync, no accounts, no analytics
+- No analytics
 - No history UI (history is silently stored but not displayed; the design
   ethos is forgiveness, not surveillance)
 - No reset button (midnight rollover handles it; manual reset would
   invite over-tracking)
 - No import/export UI (data is in localStorage; advanced users can grab
   it via DevTools)
+
+Note: cross-device sync is a goal, added after initial handoff. An earlier
+version of this document listed "no server, no sync, no accounts" as
+non-goals; that reflected a prior Claude session's assumptions, not
+Brady's actual preferences. Sync is on.
 
 Brady's working hypothesis: if the scale moves the right direction,
 adherence is fine. If it doesn't, he knows to look at eating or exercise.
@@ -59,16 +64,23 @@ preserved silently for that hypothetical case.
 
 ```
 Box-Tracker/
-├── index.html         App shell — semantic HTML, theme picker dropdown
-├── style.css          All three themes via CSS custom properties
-├── app.js             Categories config, render, persist, theme, rollover
-├── manifest.json      PWA install metadata
-├── service-worker.js  Cache-first offline support
-├── favicon.svg        Theme-aware browser tab icon (no PNG variants — iOS
-│                      install will use generic icon, intentional)
-├── netlify.toml       Cache headers (critical: SW must never cache)
-├── README.md          User-facing documentation
-├── LICENSE            MIT
+├── index.html              App shell — semantic HTML, theme picker, sign-in btn
+├── style.css               All three themes via CSS custom properties
+├── app.js                  Categories, render, persist, theme, rollover, sync
+├── manifest.json           PWA install metadata
+├── service-worker.js       Cache-first offline support; skips /api/*
+├── favicon.svg             Theme-aware browser tab icon (no PNG variants — iOS
+│                           install will use generic icon, intentional)
+├── netlify.toml            Cache headers + /api/* redirects to functions
+├── package.json            Declares @netlify/blobs dependency
+├── netlify/functions/
+│   ├── _session.mjs        HMAC-SHA256 cookie sign/verify helpers
+│   ├── auth-login.mjs      Starts GitHub OAuth flow
+│   ├── auth-callback.mjs   Exchanges code, verifies allow-list, sets cookie
+│   ├── auth-logout.mjs     Clears session cookie
+│   └── day.mjs             GET/PUT today's state, backed by Netlify Blobs
+├── README.md               User-facing documentation
+├── LICENSE                 MIT
 └── .gitignore
 ```
 
@@ -99,7 +111,9 @@ counter colors via tokens. Layout, density, and structure are constant.
 
 ### State model
 - localStorage key per day: `foodtracker.day.YYYY-MM-DD` → JSON of
-  per-category arrays of 0/1.
+  `{ state: { protein: [...], veg: [...], ... }, updatedAt: ISO string }`.
+  Legacy records (no `updatedAt`) are still readable and treated as
+  epoch-old for sync-merge purposes.
 - localStorage key for theme: `foodtracker.theme` → 'swiss' | 'ration' |
   'instrument'.
 - localStorage key for dark-mode override: `foodtracker.mode` → 'light' |
@@ -108,6 +122,34 @@ counter colors via tokens. Layout, density, and structure are constant.
   persists the override; once set, system changes stop affecting the app
   until the key is cleared manually (DevTools → Application → Local
   Storage).
+
+### Cross-device sync
+- Auth: GitHub OAuth via Netlify Functions. User clicks "Sign in with
+  GitHub" (the upload icon in the header, shown only when sync is
+  unauthorized), goes through the OAuth round-trip at
+  `/api/auth/login` → `/api/auth/callback`. Callback verifies the
+  returned GitHub numeric id matches `ALLOWED_GITHUB_USER_ID` (single-
+  user allow-list) and sets a signed httpOnly cookie (`ft_session`,
+  30-day TTL). `/api/auth/logout` clears it. Cookie is HMAC-SHA256
+  signed with `SESSION_SECRET`; no JWT library.
+- Storage: Netlify Blobs, store name `days`, key `${uid}/${date}`,
+  value `{ state, updatedAt }`.
+- Conflict rule: last-write-wins per day on `updatedAt`. PUT returns
+  409 with the server record when the server is newer; client adopts.
+- Sync is best-effort: offline / network errors are swallowed; the app
+  always works locally. Sync pulls on load and on each
+  rollover/focus/visibility tick (once a minute max), and pushes
+  debounced 400ms after each toggle.
+- Service worker MUST skip `/api/*` — those responses are never cached.
+
+### Required Netlify env vars
+- `GITHUB_CLIENT_ID`
+- `GITHUB_CLIENT_SECRET`
+- `ALLOWED_GITHUB_USER_ID` — Brady's numeric GitHub id (`curl
+  https://api.github.com/users/<username>` → `"id"`)
+- `SESSION_SECRET` — 32+ byte random hex (`openssl rand -hex 32`)
+- `URL` is provided by Netlify automatically; used to build the
+  OAuth redirect URI at runtime so it matches the deployed origin.
 
 ### Midnight rollover
 Triggered on three signals: window focus, document visibilitychange,
@@ -157,9 +199,12 @@ allocations, names, and portion text. The UI rebuilds from this array.
 ## Deployment workflow
 
 1. `git push` to the main branch on GitHub
-2. Netlify auto-deploys on push (no build step; static files)
-3. Bump `CACHE_VERSION` in `service-worker.js` if any code changed,
-   otherwise users won't get updates
+2. Netlify auto-deploys on push. Static files publish from root; Netlify
+   installs `@netlify/blobs` and bundles `netlify/functions/` automatically.
+3. Bump `CACHE_VERSION` in `service-worker.js` if any client code changed,
+   otherwise users won't get updates.
+4. If you change env-var names or the GitHub OAuth app's callback URL,
+   update both in the Netlify dashboard and GitHub's OAuth App settings.
 
 ---
 
@@ -179,21 +224,35 @@ addition; no schema migration needed.
 
 ## How to test changes
 
-There's no test suite. Manual smoke test:
+There's no test suite. For the static app (UI, theming, rollover), a
+plain HTTP server is enough:
 
 ```bash
 python3 -m http.server 8000
 # open http://localhost:8000 in a browser
 ```
 
-Important: open via http://, not file://. The service worker and
+Open via http://, not file://. The service worker and
 prefers-color-scheme detection both require a real origin.
 
-To test on iPhone before deploying: connect phone to same wifi, find
-laptop's local IP, open http://192.168.x.x:8000 in Safari on iPhone.
-Note that PWA install only works over HTTPS; the local-IP test only
-verifies the app itself works, not the install flow. For install
-testing, deploy to Netlify (which is HTTPS) and use a preview URL.
+For anything touching `/api/*` (auth or sync), you need `netlify dev`
+to run the functions locally:
+
+```bash
+npm install
+npx netlify dev
+```
+
+This still won't complete the OAuth round-trip against production
+GitHub unless you also register a second OAuth App for localhost, or
+just test sync on a Netlify deploy preview. Easiest path for a change
+that spans the API: push to a branch, let Netlify build a preview URL,
+register that URL as a temporary callback in a dev OAuth App, test,
+then merge.
+
+For iPhone testing over HTTPS (required for PWA install and for the
+session cookie's `Secure` flag), use a Netlify deploy preview URL —
+the local-IP trick won't do.
 
 ---
 

@@ -56,27 +56,40 @@ function emptyState() {
   return s;
 }
 
-function loadDayState(dateKey) {
+// Stored day record: { state, updatedAt } where updatedAt is an ISO string.
+// Old records (pre-sync) were just the state object — we tolerate that shape
+// on read by treating them as having an epoch updatedAt.
+function loadDayRecord(dateKey) {
   try {
     const raw = localStorage.getItem(DAY_KEY(dateKey));
-    if (!raw) return emptyState();
+    if (!raw) return { state: emptyState(), updatedAt: '1970-01-01T00:00:00.000Z' };
     const parsed = JSON.parse(raw);
-    // Validate shape; reset if mismatched (e.g., schema changed)
-    const fresh = emptyState();
-    for (const c of CATEGORIES) {
-      if (Array.isArray(parsed[c.key]) && parsed[c.key].length === c.count) {
-        fresh[c.key] = parsed[c.key].map(v => v ? 1 : 0);
-      }
+
+    // New shape
+    if (parsed && parsed.state && typeof parsed.updatedAt === 'string') {
+      return { state: normalizeState(parsed.state), updatedAt: parsed.updatedAt };
     }
-    return fresh;
+    // Legacy shape: the whole object is the state
+    return { state: normalizeState(parsed), updatedAt: '1970-01-01T00:00:00.000Z' };
   } catch (e) {
-    return emptyState();
+    return { state: emptyState(), updatedAt: '1970-01-01T00:00:00.000Z' };
   }
 }
 
-function saveDayState(dateKey, state) {
+function normalizeState(raw) {
+  const fresh = emptyState();
+  if (!raw || typeof raw !== 'object') return fresh;
+  for (const c of CATEGORIES) {
+    if (Array.isArray(raw[c.key]) && raw[c.key].length === c.count) {
+      fresh[c.key] = raw[c.key].map(v => v ? 1 : 0);
+    }
+  }
+  return fresh;
+}
+
+function saveDayRecord(dateKey, state, updatedAt) {
   try {
-    localStorage.setItem(DAY_KEY(dateKey), JSON.stringify(state));
+    localStorage.setItem(DAY_KEY(dateKey), JSON.stringify({ state, updatedAt }));
   } catch (e) {
     // localStorage may be unavailable in private mode — fail silently
   }
@@ -88,6 +101,7 @@ const categoriesEl  = document.getElementById('categories');
 const trigger       = document.getElementById('themeTrigger');
 const menu          = document.getElementById('themeMenu');
 const modeTrigger   = document.getElementById('modeTrigger');
+const signInBtn     = document.getElementById('signInBtn');
 const dateEl        = document.getElementById('dateText');
 const remainingEl   = document.getElementById('remainingText');
 const doneSumEl     = document.querySelector('.done-sum');
@@ -95,8 +109,8 @@ const denominatorEl = document.querySelector('.denominator');
 
 const MODE_KEY = 'foodtracker.mode';
 
-let currentDate  = todayKey();
-let currentState = loadDayState(currentDate);
+let currentDate   = todayKey();
+let currentRecord = loadDayRecord(currentDate);
 
 /* -------- RENDERING -------- */
 function renderCategories() {
@@ -135,9 +149,9 @@ function renderCategories() {
 }
 
 function applyState() {
-  // Reflect currentState into DOM
+  // Reflect currentRecord.state into DOM
   for (const c of CATEGORIES) {
-    const arr = currentState[c.key];
+    const arr = currentRecord.state[c.key];
     const section = categoriesEl.querySelector(`[data-cat="${c.key}"]`);
     const boxes = section.querySelectorAll('.app-box');
     boxes.forEach((b, i) => {
@@ -150,21 +164,22 @@ function applyState() {
 
 function updateTotals() {
   let done = 0;
-  for (const c of CATEGORIES) done += currentState[c.key].filter(v => v).length;
+  for (const c of CATEGORIES) done += currentRecord.state[c.key].filter(v => v).length;
   doneSumEl.textContent = done;
   denominatorEl.textContent = TOTAL;
   remainingEl.textContent = `${TOTAL - done} remaining`;
 }
 
 function toggleBox(catKey, idx, btn) {
-  currentState[catKey][idx] = currentState[catKey][idx] ? 0 : 1;
+  currentRecord.state[catKey][idx] = currentRecord.state[catKey][idx] ? 0 : 1;
+  currentRecord.updatedAt = new Date().toISOString();
   btn.classList.toggle('checked');
-  // update just this category's count + global
   const section = categoriesEl.querySelector(`[data-cat="${catKey}"]`);
   section.querySelector('.app-cat-count .done').textContent =
-    currentState[catKey].filter(v => v).length;
+    currentRecord.state[catKey].filter(v => v).length;
   updateTotals();
-  saveDayState(currentDate, currentState);
+  saveDayRecord(currentDate, currentRecord.state, currentRecord.updatedAt);
+  schedulePush();
 }
 
 /* -------- DATE / MIDNIGHT ROLLOVER -------- */
@@ -180,14 +195,17 @@ function checkRollover() {
   const newDate = todayKey();
   if (newDate !== currentDate) {
     currentDate = newDate;
-    currentState = loadDayState(currentDate);  // fresh state for the new day
+    currentRecord = loadDayRecord(currentDate);  // fresh state for the new day
     renderDate();
     applyState();
   }
+  // Also a sync opportunity — pull in case another device touched today.
+  pullToday();
 }
 
 // Rollover triggers: on focus (returning to PWA), on visibilitychange, and a
-// belt-and-suspenders interval every minute while the app is open.
+// belt-and-suspenders interval every minute while the app is open. These also
+// drive sync pulls.
 window.addEventListener('focus', checkRollover);
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) checkRollover();
@@ -273,10 +291,128 @@ modeTrigger.addEventListener('click', () => {
   try { localStorage.setItem(MODE_KEY, next); } catch (e) {}
 });
 
+/* -------- SYNC --------
+   Cross-device sync via /api/day. Auth is a session cookie set by the
+   GitHub OAuth flow at /api/auth/*. Conflict rule: last-write-wins per day
+   on updatedAt. Sync is best-effort; the app always works locally.
+
+   Triggers:
+   - pullToday() on load and on focus/visibility (via checkRollover).
+   - pushToday() debounced after each toggle. */
+
+let pushTimer = null;
+let pushInFlight = false;
+let pendingPush = false;
+
+function showSignIn(show) {
+  if (!signInBtn) return;
+  signInBtn.hidden = !show;
+}
+
+async function pullToday() {
+  try {
+    const res = await fetch(`/api/day?date=${currentDate}`, {
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json' }
+    });
+
+    if (res.status === 401) {
+      showSignIn(true);
+      return;
+    }
+    showSignIn(false);
+
+    if (res.status === 404) {
+      // Server has nothing for today — push whatever we have locally.
+      if (anyChecked(currentRecord.state)) schedulePush(true);
+      return;
+    }
+    if (!res.ok) return;
+
+    const server = await res.json();
+    if (!server || !server.state || !server.updatedAt) return;
+
+    if (server.updatedAt > currentRecord.updatedAt) {
+      currentRecord = { state: normalizeState(server.state), updatedAt: server.updatedAt };
+      saveDayRecord(currentDate, currentRecord.state, currentRecord.updatedAt);
+      applyState();
+    } else if (server.updatedAt < currentRecord.updatedAt) {
+      // Local is newer — push it up.
+      schedulePush(true);
+    }
+  } catch {
+    // Offline or network hiccup — stay quiet; local state is still correct.
+  }
+}
+
+function schedulePush(immediate = false) {
+  clearTimeout(pushTimer);
+  if (immediate) {
+    pushToday();
+  } else {
+    pushTimer = setTimeout(pushToday, 400);
+  }
+}
+
+async function pushToday() {
+  if (pushInFlight) {
+    pendingPush = true;
+    return;
+  }
+  pushInFlight = true;
+  try {
+    const body = JSON.stringify({ state: currentRecord.state, updatedAt: currentRecord.updatedAt });
+    const res = await fetch(`/api/day?date=${currentDate}`, {
+      method: 'PUT',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body
+    });
+
+    if (res.status === 401) {
+      showSignIn(true);
+      return;
+    }
+    showSignIn(false);
+
+    if (res.status === 409) {
+      // Server is newer — adopt it.
+      const server = await res.json();
+      if (server && server.state && server.updatedAt) {
+        currentRecord = { state: normalizeState(server.state), updatedAt: server.updatedAt };
+        saveDayRecord(currentDate, currentRecord.state, currentRecord.updatedAt);
+        applyState();
+      }
+    }
+  } catch {
+    // Network error — retry on next interaction or rollover tick.
+  } finally {
+    pushInFlight = false;
+    if (pendingPush) {
+      pendingPush = false;
+      schedulePush();
+    }
+  }
+}
+
+function anyChecked(state) {
+  for (const c of CATEGORIES) {
+    if (state[c.key].some(v => v)) return true;
+  }
+  return false;
+}
+
+if (signInBtn) {
+  signInBtn.addEventListener('click', () => {
+    window.location.href = '/api/auth/login';
+  });
+}
+
 /* -------- INITIAL RENDER -------- */
 renderDate();
 renderCategories();
 setTheme(getSavedTheme());
+pullToday();
 
 /* -------- SERVICE WORKER (offline cache) -------- */
 if ('serviceWorker' in navigator) {

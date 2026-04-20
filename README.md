@@ -64,9 +64,28 @@ When you change CSS or JS, bump the `CACHE_VERSION` constant in `service-worker.
 
 ## Data
 
-State is stored in `localStorage` under keys like `foodtracker.day.2026-04-20`. Theme preference is at `foodtracker.theme`, and any manual dark-mode override at `foodtracker.mode`. There is no export UI; if you ever want your data, open DevTools → Application → Local Storage.
+State is stored in `localStorage` under keys like `foodtracker.day.2026-04-20` as `{state, updatedAt}`. Theme preference is at `foodtracker.theme`, and any manual dark-mode override at `foodtracker.mode`. There is no export UI; if you ever want your data, open DevTools → Application → Local Storage.
 
 History is preserved silently (every day's final state is kept), but never surfaced in the UI by design. The point is forgiveness, not surveillance.
+
+## Cross-device sync
+
+The app can sync today's state across devices using your GitHub account. It's off until you sign in; the local-only version works identically without it.
+
+**How it works**: tap the small upload icon in the header to sign in with GitHub. A signed session cookie is set (30-day TTL), and from then on each toggle is mirrored to a small Netlify Function that stores today's state in Netlify Blobs. Sync is best-effort — if you're offline it's silent, and the app keeps working locally. Conflict rule is last-write-wins per day.
+
+**Setup (one time)**:
+
+1. Register a GitHub OAuth App at <https://github.com/settings/applications/new>. Set the callback URL to `<your-site>/api/auth/callback`. Grab the Client ID and generate a Client Secret.
+2. Find your numeric GitHub ID: `curl -s https://api.github.com/users/<your-username> | grep '"id"' | head -1`.
+3. In Netlify → Site configuration → Environment variables, set:
+   - `GITHUB_CLIENT_ID`
+   - `GITHUB_CLIENT_SECRET`
+   - `ALLOWED_GITHUB_USER_ID` (the number from step 2)
+   - `SESSION_SECRET` (`openssl rand -hex 32`)
+4. Deploy. The first time you open the app on a device, tap the upload icon and authorize. Repeat on each device you want to sync.
+
+Only the allow-listed GitHub account can write — the app is single-user by design.
 
 ## License
 

@@ -4,7 +4,7 @@
  * so old cached files are evicted on the user's device.
  */
 
-const CACHE_VERSION = 'foodtracker-v1';
+const CACHE_VERSION = 'foodtracker-v2';
 
 const APP_SHELL = [
   './',
@@ -41,6 +41,10 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
+
+  // Never cache the auth + sync endpoints. They must always hit the network
+  // so login state and day data stay correct.
+  if (url.pathname.startsWith('/api/')) return;
 
   event.respondWith(
     caches.match(req).then((cached) => {

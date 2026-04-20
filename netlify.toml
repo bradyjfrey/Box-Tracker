@@ -10,6 +10,29 @@
 
 [build]
   publish = "."
+  functions = "netlify/functions"
+
+# Clean URLs for the auth + sync endpoints.
+# status = 200 is a rewrite (internal), not an external redirect.
+[[redirects]]
+  from = "/api/auth/login"
+  to = "/.netlify/functions/auth-login"
+  status = 200
+
+[[redirects]]
+  from = "/api/auth/callback"
+  to = "/.netlify/functions/auth-callback"
+  status = 200
+
+[[redirects]]
+  from = "/api/auth/logout"
+  to = "/.netlify/functions/auth-logout"
+  status = 200
+
+[[redirects]]
+  from = "/api/day"
+  to = "/.netlify/functions/day"
+  status = 200
 
 [[headers]]
   for = "/service-worker.js"

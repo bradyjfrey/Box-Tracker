@@ -329,7 +329,8 @@ body {
   position: relative;
 }
 .theme-trigger,
-.mode-trigger {
+.mode-trigger,
+.sign-in-btn {
   background: transparent;
   border: none;
   color: var(--ink-dim);
@@ -343,10 +344,13 @@ body {
   min-width: 44px; min-height: 44px;
 }
 .theme-trigger:hover,
-.mode-trigger:hover { color: var(--ink); }
+.mode-trigger:hover,
+.sign-in-btn:hover { color: var(--ink); }
 .theme-trigger svg,
-.mode-trigger svg { display: block; }
+.mode-trigger svg,
+.sign-in-btn svg { display: block; }
 .mode-trigger[aria-pressed="true"] svg path { fill: currentColor; }
+.sign-in-btn[hidden] { display: none; }
 
 .theme-menu {
   position: absolute;
